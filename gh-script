@@ -1,0 +1,123 @@
+import sys
+import os
+import importlib
+import inspect
+import taichi as ti
+
+# 初始化 Taichi（根据您的代码，使用 ti.vulkan 或 ti.cpu）
+ti.init(arch=ti.vulkan)  # 或者 ti.cpu
+
+# 添加当前工作目录到 sys.path（确保能找到 taichi_kernels.py）
+# sys.path.append(os.getcwd())  # 当前 Grasshopper 目录
+# 如果文件在其他路径，添加绝对路径，例如：
+sys.path.append(r'D:\PyCode')
+
+# 动态导入 taichi_kernels.py（模块名为 taichi_kernels，无 .py 后缀）
+try:
+    kernel_module = importlib.import_module('taichi_kernels')
+    print("导入成功！")
+except ImportError as e:
+    print("导入失败:", e)
+    # 如果失败，检查路径或文件是否存在
+
+# （可选）调试：检查 inspect 是否能读取源代码（例如 substep 内核）
+try:
+    src_file = inspect.getsourcefile(kernel_module.substep)
+    print("源文件路径:", src_file)
+    src_code = inspect.getsource(kernel_module.substep)
+    print("源代码样本:\n", src_code[:200])  # 打印前200字符以验证
+except Exception as e:
+    print("inspect 检查失败:", e)
+
+# 定义变量（从您的源代码复制）
+n = 128
+quad_size = 1.0 / n
+dt = 4e-2 / n
+substeps = int(1 / 60 // dt)
+
+gravity = ti.Vector([0, -9.8, 0])
+spring_Y = 3e4
+dashpot_damping = 1e4
+drag_damping = 1
+
+ball_radius = 0.3
+ball_center = ti.Vector.field(3, dtype=float, shape=(1, ))
+ball_center[0] = [0, 0, 0]
+
+x = ti.Vector.field(3, dtype=float, shape=(n, n))
+v = ti.Vector.field(3, dtype=float, shape=(n, n))
+
+num_triangles = (n - 1) * (n - 1) * 2
+indices = ti.field(int, shape=num_triangles * 3)
+vertices = ti.Vector.field(3, dtype=float, shape=n * n)
+colors = ti.Vector.field(3, dtype=float, shape=n * n)
+
+bending_springs = False
+spring_offsets_list = []  # 临时 list，用于 append（可变）
+
+if bending_springs:
+    for i in range(-1, 2):
+        for j in range(-1, 2):
+            if (i, j) != (0, 0):
+                spring_offsets_list.append(ti.Vector([i, j]))  # append 到 list
+else:
+    for i in range(-2, 3):
+        for j in range(-2, 3):
+            if (i, j) != (0, 0) and abs(i) + abs(j) <= 2:
+                spring_offsets_list.append(ti.Vector([i, j]))  # append 到 list
+
+spring_offsets = tuple(spring_offsets_list)  # 转换为 tuple（不可变，支持 weakref）
+
+# 调用内核（使用导入的模块）
+kernel_module.initialize_mass_points(x, v, quad_size, n)
+kernel_module.initialize_mesh_indices(indices, colors, n)
+
+# GUI 初始化（从原始代码补全）
+window = ti.ui.Window("Taichi Cloth Simulation on GGUI", (1024, 1024), vsync=True)
+canvas = window.get_canvas()
+canvas.set_background_color((1, 1, 1))
+scene = ti.ui.Scene()
+camera = ti.ui.Camera()
+
+# 模拟循环（完整 while 循环，从原始代码补全；不终止，会导致 Rhino 可能卡死）
+current_t = 0.0
+
+try:
+    while window.running:
+        if current_t > 1.5:
+            # 重置
+            kernel_module.initialize_mass_points(x, v, quad_size, n)
+            current_t = 0
+
+        for i in range(substeps):
+            kernel_module.substep(x, v, gravity, dt, spring_Y, dashpot_damping, drag_damping, quad_size, n, spring_offsets, ball_center, ball_radius)
+            current_t += dt
+
+        kernel_module.update_vertices(x, vertices, n)
+
+        # 相机和场景设置
+        camera.position(0.0, 0.0, 3)
+        camera.lookat(0.0, 0.0, 0)
+        scene.set_camera(camera)
+
+        # 灯光
+        scene.point_light(pos=(0, 1, 2), color=(1, 1, 1))
+        scene.ambient_light((0.5, 0.5, 0.5))
+
+        # 渲染网格
+        scene.mesh(vertices,
+                   indices=indices,
+                   per_vertex_color=colors,
+                   two_sided=True)
+
+        # 渲染球体（避免视觉穿透）
+        scene.particles(ball_center, radius=ball_radius * 0.95, color=(0.5, 0.42, 0.8))
+
+        # 显示场景
+        canvas.scene(scene)
+        window.show()
+except Exception as e:
+    print("GUI 循环错误:", e)  # 捕获潜在错误（如窗口初始化失败）
+
+# 输出结果（例如，打印一些顶点以验证；但由于 while 循环，此处可能不会执行）
+print("模拟完成。示例顶点:", vertices[0])
